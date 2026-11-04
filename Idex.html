@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>卡密管理员面板</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:20px;background:#f3f5f8;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#222}
+.container{max-width:620px;margin:auto}
+h2{margin:8px 0 20px}
+.card{background:white;padding:18px;border-radius:14px;margin-bottom:16px;box-shadow:0 2px 12px #0000000b}
+label{display:block;font-size:14px;margin:13px 0 6px}
+input,select,textarea{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-size:15px;background:white}
+textarea{min-height:130px;font-family:monospace}
+button{width:100%;padding:13px;border:0;border-radius:9px;background:#1769e0;color:white;font-size:16px;margin-top:12px}
+button.secondary{background:#555}
+#status{white-space:pre-wrap;font-size:14px;margin-top:12px;color:#333}
+.small{font-size:12px;color:#777;line-height:1.6}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="container">
+<h2>卡密管理员面板</h2>
+
+<div class="card">
+<h3>① 服务配置</h3>
+<label>Supabase Project URL</label>
+<input id="projectUrl" placeholder="https://你的项目ID.supabase.co">
+
+<label>Supabase anon / publishable key</label>
+<input id="anonKey" placeholder="填写公开 anon / publishable key">
+
+<button onclick="connect()">连接服务</button>
+<p class="small">这里只填写公开项目地址和公开 anon / publishable key。不要填写 service_role 或任何服务器 Secret。</p>
+</div>
+
+<div class="card">
+<h3>② 管理员登录</h3>
+<label>管理员邮箱</label>
+<input id="email" type="email" autocomplete="username" placeholder="管理员邮箱">
+
+<label>管理员密码</label>
+<input id="password" type="password" autocomplete="current-password" placeholder="管理员密码">
+
+<button onclick="login()">登录</button>
+<button class="secondary" onclick="logout()">退出登录</button>
+<div id="loginStatus" class="small"></div>
+</div>
+
+<div class="card hidden" id="operationCard">
+<h3>③ 卡密管理</h3>
+
+<label>选择操作</label>
+<select id="action">
+<option value="generate-licenses">生成卡密</option>
+<option value="query-licenses">查询卡密</option>
+<option value="disable-license">冻结卡密</option>
+<option value="enable-license">解冻卡密</option>
+<option value="reset-license-device">重置设备绑定</option>
+</select>
+
+<label>请求参数 JSON</label>
+<textarea id="payload">{}</textarea>
+
+<p class="small">请按对应接口要求填写 JSON 参数。卡密只在你自己的设备上输入，不要发送给任何人。</p>
+
+<button onclick="runAction()">执行操作</button>
+<button class="secondary" onclick="clearResult()">清空结果</button>
+
+<label>执行结果</label>
+<div id="status">等待操作……</div>
+</div>
+</div>
+
+<script>
+let client=null;
+
+function show(id,msg){
+  document.getElementById(id).textContent=msg;
+}
+
+function connect(){
+  const url=document.getElementById("projectUrl").value.trim().replace(/\/+$/,"");
+  const key=document.getElementById("anonKey").value.trim();
+
+  if(!url.startsWith("https://")||!key){
+    alert("请填写正确的 Project URL 和公开 anon / publishable key");
+    return;
+  }
+
+  try{
+    client=window.supabase.createClient(url,key);
+    show("loginStatus","服务已连接，请登录管理员账号。");
+  }catch(e){
+    show("loginStatus","连接失败："+e.message);
+  }
+}
+
+async function login(){
+  if(!client){
+    connect();
+    if(!client)return;
+  }
+
+  const email=document.getElementById("email").value.trim();
+  const password=document.getElementById("password").value;
+
+  if(!email||!password){
+    alert("请输入管理员邮箱和密码");
+    return;
+  }
+
+  show("loginStatus","正在登录……");
+
+  const {data,error}=await client.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if(error){
+    show("loginStatus","登录失败："+error.message);
+    return;
+  }
+
+  show("loginStatus","登录成功，管理员身份已验证。");
+  document.getElementById("operationCard").classList.remove("hidden");
+}
+
+async function logout(){
+  if(client)await client.auth.signOut();
+  document.getElementById("operationCard").classList.add("hidden");
+  show("loginStatus","已退出登录。");
+}
+
+async function runAction(){
+  if(!client){
+    alert("请先连接服务");
+    return;
+  }
+
+  const {data:sessionData}=await client.auth.getSession();
+
+  if(!sessionData.session){
+    alert("登录状态已失效，请重新登录");
+    document.getElementById("operationCard").classList.add("hidden");
+    return;
+  }
+
+  let payload;
+
+  try{
+    payload=JSON.parse(document.getElementById("payload").value);
+  }catch(e){
+    alert("JSON 格式错误，请检查请求参数");
+    return;
+  }
+
+  const action=document.getElementById("action").value;
+  const result=document.getElementById("status");
+
+  result.textContent="正在执行，请稍候……";
+
+  const {data,error}=await client.functions.invoke("admin-api",{
+    body:{action,payload}
+  });
+
+  if(error){
+    result.textContent="请求失败：\n"+error.message;
+    return;
+  }
+
+  result.textContent=JSON.stringify(data,null,2);
+}
+
+function clearResult(){
+  document.getElementById("status").textContent="等待操作……";
+}
+</script>
+</body>
+</html>
